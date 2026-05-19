@@ -340,5 +340,4 @@ Applied Machine Learning | Data Engineering
 
 ---
 
-This repository serves as the master showcase covering documentation, diagrams, and dashboards.
-For transformations and orchestration details, refer to the linked dbt and Airflow repositories.
+
