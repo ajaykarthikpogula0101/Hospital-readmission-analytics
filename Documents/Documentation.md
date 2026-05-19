@@ -1,376 +1,344 @@
-# 🏥 Hospital Readmission Analytics – Full Documentation (Phases 1–5)
+# Hospital Readmission Analytics Pipeline
+
+This project designs an end-to-end data engineering and analytics pipeline to study hospital readmissions.
+It ingests raw patient data into Snowflake, transforms it into a clean star schema with dbt, orchestrates with Airflow, and powers BI dashboards to identify readmission risk factors.
 
 ---
 
-## ✅ Phase 1 – Dataset Exploration
+## Executive Summary
 
-*(From Kaggle “Diabetes Hospital Readmission” dataset)*
+Hospital readmissions are a critical challenge for healthcare providers, driving up costs and impacting patient outcomes.
+This project builds a modern data pipeline that ingests raw hospital visit records into Snowflake, transforms them with dbt, automates refreshes with Airflow, and delivers Power BI dashboards for hospital leadership.
 
-**Cell 1: Importing Libraries**
-
-**Cell 2: Reading & Previewing Data**
-- Demographics: race, gender, age, weight
-- Hospitalization details: admission_type_id, discharge_disposition_id, etc.
-- Medications, diagnoses, target: readmitted
-- Edge cases: `?` and `None` → need NULL; columns with hyphens not dbt-friendly; admission/discharge are coded integers.
-
-**Cell 3: Shape & Info**
-- Shape: (101,766, 50)
-- encounter_id unique; patient_nbr repeats (multiple visits)
-- Most columns are `object` type, labs are sparse
-
-**Cell 4: Missing Values**
-- max_glu_serum → ~96k missing
-- A1Cresult → ~84k missing
-- Many `?` placeholders (not actual NULLs)
-
-**Cell 5: Placeholder Missing Check**
-- weight ~97% missing → drop
-- medical_specialty ~49% missing
-- payer_code ~40% missing
-- race, diag_1–3 have some missing but usable
-
-**Cell 6: Uniqueness & Identifiers**
-- encounter_id unique → PK for visits
-- patient_nbr shows multiple encounters
-
-**Cell 7: Race & Gender Cleaning**
-- Race: mapped, `?` → Unknown
-- Gender: balanced, 3 invalid mapped to Unknown
-
-**Cell 8: Medical Specialty & Payer Code**
-- `?` → Unknown; rare categories grouped into "Other"
-- Medical specialty → 18 groups
-- Payer code → 13 groups
-
-**Cell 9: Age & Weight**
-- Weight dropped (too incomplete)
-- Age ranges cleaned into “20-30”, … “90-100”
-
-**Cell 10: Diagnosis Cleaning**
-- ICD-9 grouped into 10 broad categories
-- diag_1 → Circulatory (30k), Respiratory (14k), Diabetes (9k)
-- Created clean `dim_diagnosis` categories
-
-**Cell 11: Standardization**
-- max_glu_serum, A1Cresult standardized to consistent categories
-- Medications standardized to `no/steady/up/down`
-- change → yes/no, diabetesMed → yes/no
-- Target column: `readmitted_flag` (1 = <30 days, 0 = otherwise)
-
-**Cell 14: EDA Summary**
-- Readmission imbalance (~11%)
-- Age skewed to 60–90
-- Diagnosis: circulatory & diabetes dominate
-- Outliers exist in meds/labs → keep for now
-
-**Notes:**
-- Class imbalance to be handled later (Phase 4 modeling)
-- Outliers not capped (warehouse = source of truth)
+On top of the pipeline, predictive models were developed to identify patients at high risk of 30-day readmission.
+The solution combines data engineering, analytics, and machine learning in a single portfolio project, demonstrating how modern data stack tools can deliver both operational efficiency and business insights.
 
 ---
 
-## ✅ Phase 2 – Snowflake Setup
+## Goals
 
-**Setup Steps**
+- Automate ingestion into Snowflake
+- Transform into a clean star schema using dbt
+- Orchestrate daily refresh with Airflow
+- Visualize KPIs via Power BI
+- Document and share results on GitHub
+
+---
+
+## Tech Stack
+
+| Category | Tools |
+|----------|-------|
+| Storage & Processing | Snowflake (RAW → STAGING → ANALYTICS) |
+| Transformations | dbt-core (Snowflake adapter) |
+| Orchestration | Apache Airflow (Astronomer) |
+| BI / Dashboards | Power BI |
+| Scripting | Python + Snowflake Connector |
+| Version Control | GitHub |
+
+---
+
+## Related Repositories
+
+- **dbt Models:** [Hospital_Readmission_dbt](https://github.com/ajaykarthikpogula0101/Hospital_Readmission_dbt)
+- **Airflow Orchestration:** [Hospital_Readmission_AirflowOrchestration](https://github.com/ajaykarthikpogula0101/Hospital_Readmission_AirflowOrchestration)
+
+---
+
+## Phase 1 — Dataset Exploration
+
+Source: Kaggle "Diabetes Hospital Readmission" dataset
+
+**Key Findings**
+- Shape: 101,766 rows × 50 columns
+- `encounter_id` is unique; `patient_nbr` repeats (multiple visits per patient)
+- `weight` dropped (97% missing); `medical_specialty` and `payer_code` partially missing
+- `?` placeholders mapped to NULL or "Unknown" categories
+- ICD-9 diagnosis codes grouped into 10 broad categories
+- Target column: `readmitted_flag` (1 = readmitted within 30 days, 0 = otherwise)
+- Class imbalance: ~11% positive readmission rate
+- Medications standardized to `no / steady / up / down`
+
+---
+
+## Phase 2 — Snowflake Setup
+
+**Configuration**
 - Database: `HOSPITAL_DB`
 - Schemas: `RAW`, `STAGING`, `ANALYTICS`
 - Warehouse: `COMPUTE_WH`
 - Role: `HOSPITAL_ROLE`
-- Stage & File Format:
-  ```sql
-  CREATE FILE FORMAT RAW.CLEANED_CSV_FORMAT TYPE = 'CSV' ...;
-  CREATE STAGE RAW.HOSPITAL_STAGE FILE_FORMAT = RAW.CLEANED_CSV_FORMAT;
-  ```
-- RAW table: `RAW.PATIENT_VISITS` (50 cols)
+- Stage and file format created for CSV ingestion into `RAW.PATIENT_VISITS` (50 columns)
 
-**Roadblocks & Fixes**
-1. ❌ Privilege issues – dbt couldn’t create objects.
-   - ✅ Fix: Gave `HOSPITAL_ROLE` **OWNERSHIP** on schemas.
-2. ❌ Airflow import error (`SnowflakeOperator`).
-   - ✅ Fix: Corrected import path.
+**Roadblocks and Fixes**
+
+| Issue | Fix |
+|-------|-----|
+| dbt privilege errors — could not create objects | Granted schema OWNERSHIP to HOSPITAL_ROLE |
+| Airflow SnowflakeOperator import error | Corrected import path |
 
 ---
 
-## ✅ Phase 3 – Data Ingestion
+## Phase 3 — Data Ingestion
 
-**Setup Steps**
-- Used SnowSQL `PUT` + `COPY INTO`.
-- Partitioned files simulate daily ingestion (`2025-08-25.csv`, `2025-08-26.csv`).
-- Audit log (`AUDIT.LOAD_LOGS`) tracks filename, execution date, row count, load time.
+**Approach**
+- Used SnowSQL `PUT` and `COPY INTO` commands
+- Partitioned files simulate daily ingestion (e.g., `2025-08-25.csv`)
+- Audit log (`AUDIT.LOAD_LOGS`) tracks filename, execution date, row count, and load time
 
-**Roadblocks & Fixes**
-1. ❌ Wrong date loaded (execution_date + 1).
-   - ✅ Fix: Adjusted to execution_date - 1.
-2. ❌ Duplicate loads (fact_visits growing incorrectly).
-   - ✅ Fix: Added TRUNCATE RAW step before load.
-3. ❌ Audit log mismatch.
-   - ✅ Fix: Extended DAG to log fact table counts post-dbt.
+**Roadblocks and Fixes**
+
+| Issue | Fix |
+|-------|-----|
+| Wrong date loaded (execution_date + 1 offset) | Adjusted to execution_date - 1 |
+| Duplicate loads causing fact_visits to grow incorrectly | Added TRUNCATE RAW step before each load |
+| Audit log mismatch with actual fact counts | Extended DAG to log fact table counts post-dbt |
 
 ---
 
-## ✅ Phase 4 – dbt Setup & Modeling
+## Phase 4 — dbt Setup and Modeling
 
-**Setup**
-- dbt project: `hospital_readmission_dbt`
-- Configured schemas: staging → STAGING, marts → ANALYTICS
-- Models:
-  - Staging: `stg_patient_visits`
-  - Dimensions: `dim_patients`, `dim_diagnosis`, `dim_admission`, `dim_discharge`, `dim_medical_specialty`, `dim_payer`
-  - Facts: `fact_visits`, `fact_medications`
-- Tests: unique, not_null, accepted_values; custom threshold test for Unknowns.
+**Project Structure**
+- Staging: `stg_patient_visits`
+- Dimensions: `dim_patients`, `dim_diagnosis`, `dim_admission`, `dim_discharge`, `dim_medical_specialty`, `dim_payer`
+- Facts: `fact_visits`, `fact_medications`
+- Tests: unique, not_null, accepted_values; custom threshold test for Unknown categories
 
-**Detailed Dimensions**
-- **dim_diagnosis**: 10 categories from ICD-9; static lookup table.
-- **dim_admission**: 8 codes mapped to labels.
-- **dim_patients**:
-  - Problem: duplicates (patients with multiple demographics)
-  - Rule: take latest encounter; backfill Unknowns with recent valid value
-  - Implementation: window functions (row_number, first_value)
-  - Result: ~71k unique patients, Unknowns reduced, surrogate key added.
+**dim_patients Logic**
+- Problem: patients with multiple encounters caused demographic duplicates
+- Rule applied: latest encounter wins; backfill Unknowns with most recent valid value
+- Implementation: window functions (`ROW_NUMBER`, `FIRST_VALUE`)
+- Result: ~71K unique patients, surrogate key added, Unknown categories reduced
 
-**Roadblocks & Fixes**
-1. ❌ Privilege errors – dbt couldn’t build.
-   - ✅ Fix: Granted schema ownership.
-2. ❌ Deprecation warnings for `accepted_values` tests.
-   - ✅ Fix: Updated YAML syntax with `arguments:`.
-3. ❌ dim_patients duplicates.
-   - ✅ Fix: Applied latest-encounter business rule with window functions.
-4. ❌ Unknowns test failed.
-   - ✅ Fix: Converted to WARN instead of FAIL.
+**Roadblocks and Fixes**
+
+| Issue | Fix |
+|-------|-----|
+| dbt privilege errors | Granted schema ownership |
+| Deprecation warnings for `accepted_values` tests | Updated YAML syntax with `arguments:` |
+| dim_patients duplicates | Applied latest-encounter business rule with window functions |
+| Unknown threshold test failures | Converted failing test to WARN |
 
 **Validation**
-- 38 tests passed, 1 warning (expected)
-- Fact + dim tables correctly built in ANALYTICS
+- 38 tests passed, 1 warning (expected behavior)
+- All fact and dimension tables correctly built in ANALYTICS schema
 
 ---
 
-## ✅ Phase 5 – Orchestration & Validation
+## Phase 5 — Orchestration and Validation
 
-**Setup**
-- Airflow DAG (`daily_stage_loader_http`) steps:
-  1. Truncate RAW
-  2. Load yesterday’s file
-  3. Validate row count
-  4. Insert audit log
-  5. Trigger dbt run
-  6. Update audit log with fact counts
-  7. Run dbt tests
+**Airflow DAG Steps**
+1. Truncate RAW schema
+2. Load previous day's file
+3. Validate row count
+4. Insert audit log entry
+5. Trigger dbt run
+6. Update audit log with post-dbt fact counts
+7. Run dbt tests
 
-**Roadblocks & Fixes**
-1. ❌ DAG not visible in Airflow UI.
-   - ✅ Fix: Upgraded `apache-airflow-providers-snowflake` to 5.6.0.
-2. ❌ Audit log missing fact counts.
-   - ✅ Fix: Added update step after dbt run.
-3. ❌ Syntax error in SQL health check.
-   - ✅ Fix: Corrected placement of audit block in DAG.
+**Roadblocks and Fixes**
+
+| Issue | Fix |
+|-------|-----|
+| DAG not appearing in Airflow UI | Upgraded `apache-airflow-providers-snowflake` to 5.6.0 |
+| Audit log missing post-dbt fact counts | Added update step after dbt run completes |
+| Syntax error in SQL health check | Corrected placement of audit block in DAG |
 
 **Result**
-- DAG executes cleanly.
-- Fact tables grow incrementally.
-- Audit log aligned with RAW + facts.
+- DAG executes cleanly end-to-end
+- Fact tables grow incrementally with each daily run
+- Audit log aligned with RAW load counts and post-dbt fact counts
 
 ---
 
-## 📊 Current Status
-- End-to-end pipeline running in Prod (ANALYTICS).
-- Snowflake schemas: RAW → STAGING → ANALYTICS.
-- dbt models clean, tested, and validated.
-- Airflow orchestrates daily ingestion + dbt.
-- Audit logs validated with fact row counts.
+## Post-Phase 5 Enhancements
 
----
-After the free trial of dbt cloud and astronomer airflow cloud, had to make some changes, so set up dbt and airflow locally.
+**Prod Rollout and Schema Alignment**
+- Configured dbt profiles: dev → DEV schema, prod → ANALYTICS schema
+- Added explicit `schema=` configs inside dbt models for precise layer routing
+- Rebuilt all models in prod with `dbt run --target prod --full-refresh`
 
-## 🔧 Enhancements & Dashboard QA (Post-Phase 5)
+**Admission Type Correction**
+- Confirmed `admission_type_id = 6` means "NULL / Not Recorded" per dataset dictionary
+- Relabeled as "Unknown / Not Recorded" in `dim_admission` for business clarity
 
-**1. Prod Rollout & Schema Alignment**  
-- Configured dbt profiles with **dev → DEV_STV** and **prod → ANALYTICS**.  
-- Added `schema=` configs inside dbt models to enforce staging → STAGING and analytics → ANALYTICS.  
-- Rebuilt models in prod with `dbt run --target prod --full-refresh`.  
+**Unknown Category Labeling**
+- Race `?` → "Unknown Race"
+- Gender invalid values → "Unknown Gender"
+- Missing Age → "Unknown Age"
+- Ensures distinct, unambiguous labels across Power BI legends
 
-**2. Admission Type “NULL” Code**  
-- Confirmed that `admission_type_id = 6` means **NULL (not recorded)** in dataset dictionary.  
-- Relabeled as **“Unknown / Not Recorded”** in `dim_admission` for business clarity.  
-
-**3. Distinguishing Unknowns in Patient Demographics**  
-- Race: relabeled “?” → **Unknown Race**  
-- Gender: 3 invalid values mapped to **Unknown Gender**  
-- Age: missing values mapped to **Unknown Age**  
-- Ensures clarity in Power BI legends and avoids duplicate “Unknown” categories.  
-
-**4. Dashboard QA in Power BI**  
-- Verified KPI alignment: 102K encounters, 72K patients, 11% readmissions, 4.4 days LOS.  
-- Filters renamed to business terms (“Age Group,” “Gender,” “Race,” “Admission Type”).  
-- Standardized KPI card styling for consistency.  
-- Heading section updated with banner-style title for professional polish.  
-- Chose to **keep Unknowns visible** for transparency, aligning with data quality best practice.  
-
-**5. Diagnosis Categories (Optional)**  
-- Explored linking diag1_id, diag2_id, diag3_id.  
-- Best practice = use **role-playing dimensions** (DIM_DIAGNOSIS1/2/3) to avoid ambiguous joins in BI tools.  
-- For executive summary dashboard, analysis limited to **primary diagnosis only**.  
+**Dashboard QA**
+- Verified KPI alignment: 102K encounters, 72K patients, 11% readmission rate, 4.4 days avg LOS
+- Filters renamed to business terms: Age Group, Gender, Race, Admission Type
+- Standardized KPI card styling for visual consistency
+- Decision: retain Unknown categories in dashboards as data quality signals
 
 ---
 
-## 📊 Updated Dashboard Insights
-- Readmission rate: 11% (within 30 days)  
-- Average length of stay: 4.4 days  
-- Highest risk: elderly patients (70–90), Emergency admissions  
-- Unknown categories surfaced clearly for Race, Gender, and Admission Type → ensuring data completeness transparency  
+## Phase 6 — BI Dashboard
 
----
+**Connection**
+- Power BI connected directly to Snowflake ANALYTICS schema
 
-## 📌 Key Takeaway
-- **Unknowns are not noise — they are data quality signals.**  
-- By surfacing them clearly, dashboards build **trust** and guide improvements in upstream data collection.  
+**Key KPIs**
 
----
-
-## 🔜 Phase 6 – BI Dashboard
-Planned metrics (Power BI / Streamlit):
-- Readmission rate by diagnosis category
-- Readmission rate by age group
-- Admission type vs readmissions
-- Avg stay duration (readmitted vs not)
-- Patient volume trend
-- Filters: month, age, insurance type
-
-
-**Setup**
-- Connected Power BI to Snowflake `ANALYTICS` schema.  
-- Built executive summary dashboard with clean KPIs and demographic/admission breakdowns.  
-- Applied business-friendly naming for filters and categories.  
-- Ensured Unknowns were surfaced clearly instead of hidden.  
-
-**Dashboard Metrics & Insights**
-- **Readmission Rate (30 days):** 11%  
-- **Average Length of Stay:** 4.4 days  
-- **Encounters:** ~102K total  
-- **Unique Patients:** ~72K  
+| Metric | Value |
+|--------|-------|
+| Readmission Rate (30 Days) | 11% |
+| Average Length of Stay | 4.4 days |
+| Total Encounters | ~102K |
+| Unique Patients | ~72K |
 
 **Breakdowns**
-- **By Age Group:** elderly (70–90) and young adults (20–30) at higher risk  
-- **By Gender & Race:** readmission rates broadly consistent, with Unknown Race/Gender surfaced transparently  
-- **By Admission Type:** dominated by Emergency encounters; “Unknown / Not Recorded” shown separately  
+- **By Age Group:** Elderly patients (70–90) and young adults (20–30) show higher readmission rates
+- **By Gender and Race:** Rates broadly consistent across groups; Unknown categories surfaced transparently
+- **By Admission Type:** Emergency encounters dominate (53%); "Unknown / Not Recorded" shown separately
 
-**Design Improvements**
-- Standardized KPI card styling (consistent background and font).  
-- Filters renamed and aligned: Age Group, Gender, Race, Admission Type.  
-- Dashboard title redesigned with banner-style heading for executive readability.  
-- Decision: keep Unknowns visible → critical for data quality transparency.  
-
-**Notes**
-- No time-series trends included (dataset has no admission/discharge dates).  
-- Diagnosis categories explored but not included in summary view (requires role-playing dimensions in Power BI).  
-
+**Design Decisions**
+- Unknown categories retained and clearly labeled — critical for data quality transparency
+- Diagnosis role-playing dimensions (DIM_DIAGNOSIS1/2/3) identified as best practice for future multi-diagnosis analysis
+- No time-series trends included — dataset lacks admission and discharge date fields
 
 ---
 
-## 📌 Lessons Learned (Roadblocks Recap)
-- **Connection & Privileges:** Needed schema ownership for dbt to build.
-- **Airflow DAG:** Fixed import path, upgraded provider package, corrected execution_date logic.
-- **Audit Logging:** Extended to track fact counts post-dbt.
-- **dbt Tests:** Fixed deprecation warnings; allowed WARN for >5% Unknowns.
-- **dim_patients:** Resolved duplicates by defining business rule (latest encounter wins).
-- **Prod Rollout:** Discovered schema alignment issues between staging and analytics; fixed by adding explicit `schema=` configs in dbt models.
-- **Admission Type:** Learned that `admission_type_id = 6` is a valid dataset code (“NULL / Not Recorded”); relabeled in `dim_admission` to avoid misleading NULLs in dashboards.
-- **Unknown Categories:** Initially surfaced as plain “Unknown” across race and gender; relabeled as **Unknown Race**, **Unknown Gender**, and **Unknown Age** for clarity.
-- **Data Types in Joins:** Found staging stored `admission_type_id` as text while dim stored as number; casting fixed failed joins that led to blanks in Power BI.
-- **Diagnosis Dimensions:** Attempting to join diag1/2/3 to a single dim caused ambiguous relationships in Power BI; best practice is to use role-playing dimensions (DIM_DIAGNOSIS1/2/3).
-- **Dashboard QA:** Discovered readability issues with filter labels and card styling; fixed with business-friendly names, consistent formatting, and a banner-style heading.
-- **Data Quality Philosophy:** Decided to keep Unknowns visible in dashboards as signals of upstream data issues, ensuring transparency and trust.
+## Snowflake Setup (Screenshots)
 
+**Database and Schemas**
+![Snowflake Database](diagrams/snowflake/snowflake_database.PNG)
 
----
+**RAW, STAGING, ANALYTICS**
+![Snowflake Schemas](diagrams/snowflake/sf_schema_tables.PNG)
 
-## ✅ Phase 7 – Modeling & Evaluation
+**Stage and File Format**
+![Snowflake Stage](diagrams/snowflake/snowflake_stage.PNG)
 
-### 🎯 Objective
-Predict **30-day hospital readmission** using Snowflake-transformed data.  
-We tested multiple algorithms, handled imbalance, tuned parameters, and applied explainability methods (SHAP, EBM).
+**Analytics Layer**
+![Snowflake Analytics](diagrams/snowflake/snowflake_analytics.PNG)
 
 ---
 
-### Step 1: Dataset Prep
-- Source: `fact_visits` + dimensions from **Snowflake Analytics schema**  
-- Final dataset: ~102K encounters, ~72K patients  
-- Target: **readmitted_flag** (1 = readmitted <30 days, 0 = otherwise)  
-- Distribution: 0 → 89%, 1 → 11% → **highly imbalanced**  
-- Split: **patient-level 80/20** to avoid leakage  
+## dbt Transformations (Screenshots)
+
+**Lineage Graph**
+![dbt Lineage](diagrams/dbt/dbt_lineage.PNG)
+
+**Model Documentation**
+![dbt Docs](diagrams/dbt/dbt.PNG)
 
 ---
 
-### Step 2: Baseline Models
-- Features: race, gender, age group, num_medications, time_in_hospital  
-- Results:  
-  - **Logistic Regression** → AUC ~0.55, Recall ~0.50, Precision ~0.12  
-  - **Random Forest** → AUC ~0.52, predicted mostly majority class (Recall = 0)  
-  - **XGBoost (default)** → AUC ~0.54, Recall ~0.50, Precision ~0.12  
-- ⚠️ Baseline features were too weak and performance was only slightly better than random.  
+## Dashboard Preview
+
+**Power BI Executive Summary**
+![Dashboard](dashboards/powerbi_dashboard.PNG)
 
 ---
 
-### Step 3: Enriched Dataset
-- Added: diagnoses, admission/discharge info, payer, specialty, labs, 23 drug features  
-- One-hot + scaling → ~200 features  
-- **Logistic Regression**:  
-  - AUC ~0.62 (no weights)  
-  - With class weights → AUC ~0.67, Recall ~0.57, Precision ~0.18  
-- Confirms that **discharge type, age, and diagnoses** are the strongest predictors.  
+## Phase 7 — Predictive Modeling and Evaluation
+
+**Objective**
+Predict 30-day hospital readmission using Snowflake-transformed data.
+Multiple algorithms were tested, class imbalance was addressed, hyperparameters were tuned, and explainability methods (SHAP, EBM) were applied.
+
+**Dataset**
+- Source: `fact_visits` joined with dimension tables from Snowflake ANALYTICS schema
+- Final dataset: ~102K encounters, ~72K patients
+- Target: `readmitted_flag` (1 = readmitted within 30 days)
+- Class distribution: 89% negative, 11% positive — highly imbalanced
+- Split: patient-level 80/20 to prevent data leakage
+
+**Baseline Models**
+
+| Model | ROC-AUC | Recall | Notes |
+|-------|---------|--------|-------|
+| Logistic Regression | ~0.55 | ~0.50 | Weak baseline features |
+| Random Forest | ~0.52 | ~0.00 | Predicted majority class only |
+| XGBoost (default) | ~0.54 | ~0.50 | Only slightly above random |
+
+**Enriched Dataset Results**
+- Added diagnoses, admission/discharge info, payer, specialty, labs, 23 drug features (~200 features total)
+- Logistic Regression with class weights: AUC ~0.67, Recall ~0.57
+- Confirmed discharge type, age, and diagnoses as strongest predictors
+
+**Imbalance Handling**
+- Tested: undersampling, SMOTE, class weights, threshold tuning
+- Decision: prioritize recall — catching at-risk patients is more critical than precision in healthcare
+
+**Hyperparameter Tuning (XGBoost)**
+- Method: RandomizedSearchCV (30 iterations, 5-fold cross-validation)
+- Parameters tuned: `max_depth`, `n_estimators`, `learning_rate`, `subsample`, `colsample_bytree`, `min_child_weight`, `gamma`
+- Best cross-validated ROC-AUC: ~0.68
+- Final test performance: **ROC-AUC 0.684–0.687**
+
+**Alternative Models**
+
+| Model | ROC-AUC | Notes |
+|-------|---------|-------|
+| LightGBM (weighted) | ~0.68 | Similar to XGBoost |
+| CatBoost | ~0.68–0.69 | Did not consistently outperform XGBoost |
+| EBM | ~0.67 | Lower performance, higher interpretability |
+
+**Explainability**
+- SHAP (XGBoost, LightGBM, CatBoost): discharge disposition, age group, diagnosis categories, and medication count identified as top global drivers
+- EBM feature curves confirmed medical intuition: elderly patients, diabetes, and complex discharges = higher readmission risk
+- Logistic Regression coefficients validated clinical logic (e.g., hospice discharge → negative readmission probability)
+
+**Final Model Selection**
+- Best model: XGBoost with reduced features, class weighting, and hyperparameter tuning
+- Test ROC-AUC: ~0.687
+- Recall prioritized over precision to align with clinical objectives
 
 ---
 
-### Step 4: Imbalance Handling
-- Tested: **undersampling, SMOTE, class weights, threshold tuning**  
-- Undersampling and SMOTE boosted recall but lowered precision significantly.  
-- Threshold tuning confirmed the trade-off:  
-  - **Low thresholds** → higher recall but many false alarms  
-  - **High thresholds** → better precision but many missed readmissions  
-- Decision: prioritize **recall** since catching risky patients is more important in healthcare.  
+## Results
+
+- Successfully ingested and processed ~102,000 hospital encounters into Snowflake
+- Designed a robust star schema (`fact_visits`, `dim_patients`, `dim_diagnosis`, `dim_admission`) to power analytics
+- dbt lineage graph and documentation provided full transparency across 10+ models and 40+ tests
+- Automated daily refresh with Airflow DAGs ensured reproducibility and near real-time insights
+- Best predictive model (XGBoost, tuned and weighted) achieved ROC-AUC ~0.687 with recall prioritized
+- Power BI executive dashboard delivered for hospital leadership with readmission rates, LOS analysis, and patient volume insights
+
+**Business Impact:** This pipeline demonstrates how modern data engineering and ML workflows can help hospitals reduce readmission costs, improve patient care, and highlight upstream data quality gaps.
 
 ---
 
-### Step 5: Hyperparameter Tuning (XGBoost)
-- Used **RandomizedSearchCV** (30 iterations, 5-fold CV)  
-- Tuned parameters: `max_depth`, `n_estimators`, `learning_rate`, `subsample`, `colsample_bytree`, `min_child_weight`, `gamma`  
-- Best cross-validated ROC-AUC: ~0.68  
-- Refit tuned model on full data with `scale_pos_weight` to handle imbalance  
-- **Result:** Weighted & tuned XGBoost achieved **ROC-AUC ≈ 0.684–0.687** on the test set  
-- This was the best performing model in the project  
+## Lessons Learned
+
+| Area | Lesson |
+|------|--------|
+| Snowflake Privileges | Schema ownership required for dbt to build objects |
+| Airflow DAG | Fixed import path, upgraded provider package, corrected execution_date logic |
+| Audit Logging | Extended to track fact counts post-dbt run |
+| dbt Tests | Fixed deprecation warnings; allowed WARN for Unknown categories exceeding 5% |
+| dim_patients | Resolved duplicates by applying latest-encounter business rule with window functions |
+| Prod Rollout | Schema alignment issues fixed by adding explicit schema configs in dbt models |
+| Admission Type | `admission_type_id = 6` is a valid dataset code; relabeled to avoid misleading NULLs |
+| Unknown Categories | Relabeled as Unknown Race, Unknown Gender, Unknown Age for clarity in Power BI |
+| Data Type Joins | Staging stored admission_type_id as text; dim stored as number — casting fixed blank joins |
+| Diagnosis Dimensions | Role-playing dimensions (DIM_DIAGNOSIS1/2/3) required to avoid ambiguous relationships |
+| Dashboard QA | Business-friendly filter labels and consistent card styling improved executive readability |
+| Data Quality Philosophy | Unknowns retained as data quality signals rather than hidden or dropped |
 
 ---
 
-### Step 6: Alternative Algorithms
-- **LightGBM** with class weighting achieved ROC-AUC ~0.68  
-- **CatBoost** achieved similar ROC-AUC (~0.68–0.69), but did not outperform XGBoost  
-- **EBM (Explainable Boosting Machine)** reached ~0.67, but prioritized interpretability over raw performance  
-- Conclusion: alternatives confirmed similar performance, but **none exceeded tuned XGBoost**  
+## Business Value
+
+- Identifies patients at high risk of 30-day readmission
+- Highlights critical diagnosis categories driving readmissions (circulatory, diabetes)
+- Enables hospitals to target interventions and reduce costs
+- Surfaces data quality issues (Unknown payer codes, specialties, labs) for operational improvement
 
 ---
 
-### Step 7: Explainability
-- **Logistic Regression coefficients**: validated clinical sense (children = very low risk; hospice discharges negative; certain transfer discharges positive)  
-- **SHAP (XGBoost, LightGBM, CatBoost):**  
-  - Global importance → discharge disposition, age group, diagnoses, number of medications  
-  - Local plots explained why specific patients were flagged as high-risk  
-- **EBM (Explainable Boosting Machine):**  
-  - Feature curves made results easy to interpret for clinicians  
-  - Trends confirmed medical intuition: elderly + diabetes + complex discharges = higher risk  
+## Author
+
+**Ajay Karthik Pogula**
+Applied Machine Learning | Data Engineering
+[GitHub](https://github.com/ajaykarthikpogula0101)
 
 ---
 
-### 📌 Final Outcome
-- Baseline models were weak (AUC ~0.55).  
-- Enriched dataset improved performance significantly (AUC ~0.67).  
-- **Best model:** **XGBoost with reduced features, class weighting, and hyperparameter tuning**, achieving **ROC-AUC ~0.687**.  
-- Supporting models (LightGBM, CatBoost, EBM) provided validation and interpretability but did not surpass XGBoost.  
-- Key drivers of readmission: **discharge disposition, age, diagnosis categories, labs, and medications**.  
-- **Recall was prioritized** over precision, aligning with hospital needs to catch as many at-risk patients as possible.  
-- Unknown categories were kept visible → treated as **data quality signals** rather than noise.  
-
----
-
-
-
-
+This repository serves as the master showcase covering documentation, diagrams, and dashboards.
+For transformations and orchestration details, refer to the linked dbt and Airflow repositories.
