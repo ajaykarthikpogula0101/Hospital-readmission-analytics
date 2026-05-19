@@ -35,8 +35,8 @@ The solution combines **data engineering, analytics, and machine learning** in a
 ---
 
 ## 🔗 Related Repositories
-- **dbt Models:** [Hospital_Readmission_dbt](https://github.com/srilekhatv/Hospital_Readmission_dbt)  
-- **Airflow Orchestration:** [Hospital_Readmission_AirflowOrchestration](https://github.com/srilekhatv/Hospital_Readmission_AirflowOrchestration)  
+- **dbt Models:** [Hospital_Readmission_dbt](https://github.com/ajaykarthikpogula0101/Hospital_Readmission_dbt)  
+- **Airflow Orchestration:** [Hospital_Readmission_AirflowOrchestration](https://github.com/ajaykarthikpogula0101/Hospital_Readmission_AirflowOrchestration)  
 
 ---
 
@@ -122,7 +122,6 @@ Our goal: predict whether a patient would be **readmitted within 30 days**.
 
 ⚡ **Impact:** This pipeline demonstrates how modern data engineering + ML workflows can help hospitals **reduce readmission costs, improve patient care, and highlight data quality gaps**.
 
-
 ---
 
 ## 📌 Lessons Learned
@@ -131,15 +130,23 @@ Our goal: predict whether a patient would be **readmitted within 30 days**.
 - **Airflow DAG:** Fixed execution_date bug, upgraded Snowflake provider  
 - **Modeling:** Chose XGBoost (tuned + weighted, reduced features) as the best model (~0.687 AUC)  
 - **Explainability:** SHAP + EBM explained drivers like discharge disposition, age, and diagnoses  
-- **Data Quality Philosophy:** Kept “Unknown” categories visible to highlight upstream data gaps  
+- **Data Quality Philosophy:** Kept "Unknown" categories visible to highlight upstream data gaps  
 
 ---
 
-## 👩‍⚕️ Business Value
+## 👨‍💻 Business Value
 - Identifies **patients at high risk of 30-day readmission**  
 - Highlights **critical diagnoses** (circulatory, diabetes)  
 - Enables hospitals to **target interventions** and reduce costs  
 - Surfaces **data quality issues** (Unknown payer codes, specialties, labs) for operational improvement  
+
+---
+
+## 👤 Author
+
+**Ajay Karthik Pogula**  
+Applied Machine Learning | Data Engineering  
+[GitHub](https://github.com/ajaykarthikpogula0101)
 
 ---
 
